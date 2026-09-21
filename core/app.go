@@ -424,6 +424,18 @@ type App interface {
 	//     To manually reload the cache you can call [App.ReloadCachedCollections]
 	FindCachedCollectionByNameOrId(nameOrId string) (*Collection, error)
 
+	// ComputedEngine returns the app-wide singleton JS engine used to
+	// compile and evaluate "computed" type fields.
+	ComputedEngine() ComputedEngine
+
+	// ComputedResolve evaluates the computed fields of the provided records
+	// within the given request session and stores the results on each record.
+	ComputedResolve(req *ComputeRequest, records []*Record, optFieldNames ...string) error
+
+	// ComputedResolveOne is a convenience wrapper around ComputedResolve for
+	// a single record without request context (server-side usage).
+	ComputedResolveOne(record *Record) error
+
 	// FindCollectionReferences returns information for all relation
 	// fields referencing the provided collection.
 	//

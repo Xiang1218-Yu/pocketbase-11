@@ -166,6 +166,16 @@ type MultiValuer interface {
 	IsMultiple() bool
 }
 
+// VirtualField defines a field interface for fields that are not persisted in
+// the database (no SQL column is created for them and they are not included
+// in the record DB export).
+//
+// Their values are computed/resolved at read time instead.
+type VirtualField interface {
+	// IsVirtual reports that the field doesn't have a database column.
+	IsVirtual() bool
+}
+
 // RecordInterceptor defines a field interface for reacting to various
 // Record related operations (create, delete, validate, etc.).
 type RecordInterceptor interface {

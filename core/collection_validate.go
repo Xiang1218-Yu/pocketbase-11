@@ -296,6 +296,18 @@ func (validator *collectionValidator) checkFieldValidators(value any) error {
 	errs := validation.Errors{}
 
 	for i, field := range fields {
+		// computed (virtual) fields are schema-defined but not backed by a
+		// view column; they are not supported on view collections
+		if validator.new.IsView() {
+			if vf, ok := field.(VirtualField); ok && vf.IsVirtual() {
+				errs[strconv.Itoa(i)] = validation.NewError(
+					"validation_virtual_field_not_allowed",
+					"Computed (virtual) fields are not supported on view collections.",
+				)
+				continue
+			}
+		}
+
 		if err := field.ValidateSettings(validator.ctx, validator.app, validator.new); err != nil {
 			errs[strconv.Itoa(i)] = err
 		}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -253,6 +254,37 @@ func checkMFA(e *core.RequestEvent, authRecord *core.Record, currentAuthMethod s
 	deleteMFA()
 
 	return "", nil
+}
+
+// computedFieldsOrError returns an ApiError if any of the provided records has
+// a computed field evaluation error attached during enrichment.
+//
+// Computed fields must never return fake/fallback values: a single evaluation
+// failure makes the whole request fail.
+func computedFieldsOrError(records ...*core.Record) *router.ApiError {
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		errs := record.ComputedErrors()
+		if len(errs) == 0 {
+			continue
+		}
+
+		// produce a deterministic, descriptive message
+		fields := make([]string, 0, len(errs))
+		var first error
+		for name, err := range errs {
+			fields = append(fields, name)
+			if first == nil {
+				first = err
+			}
+		}
+		sort.Strings(fields)
+
+		return router.NewApiError(http.StatusInternalServerError, "Failed to evaluate computed field(s): "+strings.Join(fields, ", "), first)
+	}
+	return nil
 }
 
 // EnrichRecord parses the request context and enrich the provided record:

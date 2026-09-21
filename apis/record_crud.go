@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,31 @@ import (
 	"github.com/pocketbase/pocketbase/tools/search"
 	"github.com/pocketbase/pocketbase/tools/security"
 )
+
+// parseListPagination extracts page/perPage from the list query parameters.
+func parseListPagination(queryValues map[string][]string) (int, int) {
+	get := func(key string, def int) int {
+		if vs, ok := queryValues[key]; ok && len(vs) > 0 && vs[0] != "" {
+			if n, err := strconv.Atoi(vs[0]); err == nil {
+				return n
+			}
+		}
+		return def
+	}
+
+	page := get(search.PageQueryParam, 1)
+	if page <= 0 {
+		page = 1
+	}
+	perPage := get(search.PerPageQueryParam, search.DefaultPerPage)
+	if perPage <= 0 {
+		perPage = search.DefaultPerPage
+	}
+	if perPage > search.MaxPerPage {
+		perPage = search.MaxPerPage
+	}
+	return page, perPage
+}
 
 // bindRecordCrudApi registers the record crud api endpoints and
 // the corresponding handlers.
@@ -61,33 +87,83 @@ func recordsList(e *core.RequestEvent) error {
 
 	query := e.App.RecordQuery(collection)
 
-	fieldsResolver := core.NewRecordFieldResolver(e.App, collection, requestInfo, true)
-
-	if !requestInfo.HasSuperuserAuth() && collection.ListRule != nil && *collection.ListRule != "" {
-		expr, err := search.FilterData(*collection.ListRule).BuildExpr(fieldsResolver)
-		if err != nil {
-			return err
+	// computed (virtual) fields in the client-side filter require in-memory
+	// post-processing because they don't have SQL columns
+	rawClientFilter := e.Request.URL.Query().Get(search.FilterQueryParam)
+	var computedFilter *core.ComputedFilter
+	if rawClientFilter != "" {
+		if parsed, needsPost, err := core.FilterNeedsPostProcessing(collection, rawClientFilter); err == nil && needsPost {
+			computedFilter = parsed
 		}
-		query.AndWhere(expr)
-
-		// will be applied by the search provider right before executing the query
-		// fieldsResolver.UpdateQuery(query)
 	}
 
-	// hidden fields are searchable only by superusers
-	fieldsResolver.SetAllowHiddenFields(requestInfo.HasSuperuserAuth())
+	var records []*core.Record
+	var result *search.Result
 
-	searchProvider := search.NewProvider(fieldsResolver).Query(query)
+	if computedFilter != nil {
+		expandParam := e.Request.URL.Query().Get("expand")
+		expands := []string{}
+		if expandParam != "" {
+			expands = strings.Split(expandParam, ",")
+		}
 
-	// use rowid when available to minimize the need of a covering index with the "id" field
-	if !collection.IsView() {
-		searchProvider.CountCol("_rowid_")
-	}
+		page, perPage := parseListPagination(e.Request.URL.Query())
 
-	records := []*core.Record{}
-	result, err := searchProvider.ParseAndExec(e.Request.URL.Query().Encode(), &records)
-	if err != nil {
-		return firstApiError(err, e.BadRequestError("", err))
+		postResult, postErr := core.ExecComputedPostFilter(core.ComputedListRequest{
+			App:            e.App,
+			Collection:     collection,
+			RequestInfo:    requestInfo,
+			BuildBaseQuery: func() *dbx.SelectQuery { return e.App.RecordQuery(collection) },
+			Sort:           e.Request.URL.Query().Get(search.SortQueryParam),
+			Page:           page,
+			PerPage:        perPage,
+			Filter:         computedFilter,
+			Expands:        expands,
+		})
+		if postErr != nil {
+			if errors.Is(postErr, core.ErrComputedFilterScanLimit) {
+				return e.BadRequestError("The computed filter matched too many candidate records; refine the SQL portion of the filter or narrow the page.", postErr)
+			}
+			return firstApiError(postErr, e.BadRequestError("Failed to apply computed filter.", postErr))
+		}
+
+		records = postResult.Records
+		result = &search.Result{
+			Items:      records,
+			Page:       postResult.Page,
+			PerPage:    postResult.PerPage,
+			TotalItems: postResult.TotalItems,
+			TotalPages: postResult.TotalPages,
+		}
+	} else {
+		fieldsResolver := core.NewRecordFieldResolver(e.App, collection, requestInfo, true)
+
+		if !requestInfo.HasSuperuserAuth() && collection.ListRule != nil && *collection.ListRule != "" {
+			expr, err := search.FilterData(*collection.ListRule).BuildExpr(fieldsResolver)
+			if err != nil {
+				return err
+			}
+			query.AndWhere(expr)
+
+			// will be applied by the search provider right before executing the query
+			// fieldsResolver.UpdateQuery(query)
+		}
+
+		// hidden fields are searchable only by superusers
+		fieldsResolver.SetAllowHiddenFields(requestInfo.HasSuperuserAuth())
+
+		searchProvider := search.NewProvider(fieldsResolver).Query(query)
+
+		// use rowid when available to minimize the need of a covering index with the "id" field
+		if !collection.IsView() {
+			searchProvider.CountCol("_rowid_")
+		}
+
+		records = []*core.Record{}
+		result, err = searchProvider.ParseAndExec(e.Request.URL.Query().Encode(), &records)
+		if err != nil {
+			return firstApiError(err, e.BadRequestError("", err))
+		}
 	}
 
 	event := new(core.RecordsListRequestEvent)
@@ -99,6 +175,10 @@ func recordsList(e *core.RequestEvent) error {
 	return e.App.OnRecordsListRequest().Trigger(event, func(e *core.RecordsListRequestEvent) error {
 		if err := EnrichRecords(e.RequestEvent, e.Records); err != nil {
 			return firstApiError(err, e.InternalServerError("Failed to enrich records", err))
+		}
+
+		if apiErr := computedFieldsOrError(e.Records...); apiErr != nil {
+			return apiErr
 		}
 
 		// Add a randomized throttle in case of too many empty search filter attempts.
@@ -198,6 +278,10 @@ func recordView(e *core.RequestEvent) error {
 	return e.App.OnRecordViewRequest().Trigger(event, func(e *core.RecordRequestEvent) error {
 		if err := EnrichRecord(e.RequestEvent, e.Record); err != nil {
 			return firstApiError(err, e.InternalServerError("Failed to enrich record", err))
+		}
+
+		if apiErr := computedFieldsOrError(e.Record); apiErr != nil {
+			return apiErr
 		}
 
 		return execAfterSuccessTx(true, e.App, func() error {
@@ -357,6 +441,10 @@ func recordCreate(responseWriteAfterTx bool, optFinalizer func(data any) error) 
 				return firstApiError(err, e.InternalServerError("Failed to enrich record", err))
 			}
 
+			if apiErr := computedFieldsOrError(e.Record); apiErr != nil {
+				return apiErr
+			}
+
 			err = execAfterSuccessTx(responseWriteAfterTx, e.App, func() error {
 				return e.JSON(http.StatusOK, e.Record)
 			})
@@ -494,6 +582,10 @@ func recordUpdate(responseWriteAfterTx bool, optFinalizer func(data any) error) 
 			err = EnrichRecord(e.RequestEvent, e.Record)
 			if err != nil {
 				return firstApiError(err, e.InternalServerError("Failed to enrich record", err))
+			}
+
+			if apiErr := computedFieldsOrError(e.Record); apiErr != nil {
+				return apiErr
 			}
 
 			err = execAfterSuccessTx(responseWriteAfterTx, e.App, func() error {

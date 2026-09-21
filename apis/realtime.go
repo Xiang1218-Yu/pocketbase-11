@@ -709,6 +709,19 @@ func realtimeBroadcastRecord(app core.App, action string, record *core.Record, d
 							continue
 						}
 
+						// computed fields must never be broadcast with missing/fake
+						// values - skip the message for this client if any evaluation failed
+						if computedErrs := cleanRecord.ComputedErrors(); len(computedErrs) > 0 {
+							app.Logger().Debug(
+								"[broadcastRecord] computed field error - skipping message",
+								slog.String("id", cleanRecord.Id),
+								slog.String("collectionName", cleanRecord.Collection().Name),
+								slog.String("sub", sub),
+								slog.Any("errors", computedErrs),
+							)
+							continue
+						}
+
 						data := &recordData{
 							Action: action,
 							Record: cleanRecord,
@@ -875,6 +888,26 @@ func realtimeCanAccessRecord(
 	err := checkForSuperuserOnlyRuleFields(requestInfo)
 	if err != nil {
 		return false
+	}
+
+	// filters referencing computed (virtual) fields cannot be translated to
+	// SQL - they are evaluated in-memory after enrichment
+	if parsed, needsPost, parseErr := core.FilterNeedsPostProcessing(record.Collection(), filter); parseErr == nil && needsPost {
+		// use a fresh copy: computed results are auth-context dependent
+		// (hidden dependency propagation) and the broadcast record is shared
+		// across all subscriber goroutines
+		checkRecord := record.Fresh()
+		req := core.NewComputeRequest(app, core.ComputedRequestConfig{
+			RequestInfo:     requestInfo,
+			RelationFetcher: core.ComputedAPIRelationFetcher(app, requestInfo),
+		})
+		if evalErr := app.ComputedResolve(req, []*core.Record{checkRecord}, parsed.ReferencedComputedFields(record.Collection())...); evalErr != nil {
+			return false
+		}
+		if len(checkRecord.ComputedErrors()) > 0 {
+			return false
+		}
+		return parsed.Eval(checkRecord, req)
 	}
 
 	var exists int

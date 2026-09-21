@@ -53,8 +53,11 @@ type Record struct {
 }
 
 const systemHookIdRecord = "__pbRecordSystemHook__"
+const systemHookIdRecordComputed = "__pbRecordComputedSystemHook__"
 
 func (app *BaseApp) registerRecordHooks() {
+	app.registerComputedHooks()
+
 	app.OnModelValidate().Bind(&hook.Handler[*ModelEvent]{
 		Id: systemHookIdRecord,
 		Func: func(me *ModelEvent) error {
@@ -1138,6 +1141,11 @@ func (m *Record) dbExport() (map[string]any, error) {
 	var fieldName string
 	for _, field := range fields {
 		fieldName = field.GetName()
+
+		// virtual (computed) fields are not persisted
+		if vf, ok := field.(VirtualField); ok && vf.IsVirtual() {
+			continue
+		}
 
 		if f, ok := field.(DriverValuer); ok {
 			v, err := f.DriverValue(m)

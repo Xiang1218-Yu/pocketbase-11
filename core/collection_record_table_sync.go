@@ -35,7 +35,14 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 
 			// add fields definition
 			for _, field := range fields {
-				cols[field.GetName()] = field.ColumnType(app)
+				if isVirtualField(field) {
+					continue // virtual (computed) fields don't have SQL columns
+				}
+				columnType := field.ColumnType(app)
+				if columnType == "" {
+					continue // extra guard for fields without column definition
+				}
+				cols[field.GetName()] = columnType
 			}
 
 			// create table
@@ -83,6 +90,10 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 				continue // exist
 			}
 
+			if isVirtualField(oldField) {
+				continue // never had a column
+			}
+
 			_, err := txApp.DB().DropColumn(newTableName, oldField.GetName()).Execute()
 			if err != nil {
 				return fmt.Errorf("failed to drop column %s - %w", oldField.GetName(), err)
@@ -92,6 +103,10 @@ func (app *BaseApp) SyncRecordTableSchema(newCollection *Collection, oldCollecti
 		// check for new or renamed columns
 		toRename := map[string]string{}
 		for _, field := range newFields {
+			if isVirtualField(field) {
+				continue // virtual (computed) fields don't have SQL columns
+			}
+
 			oldField := oldFields.GetById(field.GetId())
 			// Note:
 			// We are using a temporary column name when adding or renaming columns

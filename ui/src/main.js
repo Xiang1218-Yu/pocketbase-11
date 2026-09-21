@@ -61,6 +61,7 @@ import "./fields/select/init";
 import "./fields/json/init";
 import "./fields/geoPoint/init";
 import "./fields/password/init";
+import "./fields/computed/init";
 import "./collections/indexUpsertModal";
 import "./collections/collectionUpsertModal";
 import "./collections/addCollectionFieldButton";
