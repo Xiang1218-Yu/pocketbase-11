@@ -77,6 +77,15 @@ func recordsList(e *core.RequestEvent) error {
 	// hidden fields are searchable only by superusers
 	fieldsResolver.SetAllowHiddenFields(requestInfo.HasSuperuserAuth())
 
+	rawFilter := requestInfo.Query[search.FilterQueryParam]
+	usesComputedFilter, computedFilterCheckErr := filterUsesComputedField(collection, rawFilter)
+	if computedFilterCheckErr != nil {
+		return firstApiError(computedFilterCheckErr, e.BadRequestError("Invalid filter.", computedFilterCheckErr))
+	}
+	if usesComputedFilter {
+		return recordsListWithComputedFilter(e, collection, query, requestInfo, rawFilter)
+	}
+
 	searchProvider := search.NewProvider(fieldsResolver).Query(query)
 
 	// use rowid when available to minimize the need of a covering index with the "id" field

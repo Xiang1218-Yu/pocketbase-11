@@ -44,6 +44,7 @@ type Record struct {
 	customVisibility *store.Store[string, bool]
 	data             *store.Store[string, any]
 	expand           *store.Store[string, any]
+	computed         *computedRecordContext
 
 	BaseModel
 
@@ -493,6 +494,10 @@ func newRecordFromNullStringMap(collection *Collection, data dbx.NullStringMap) 
 		var value any
 		var err error
 
+		if _, isComputed := field.(*ComputedField); isComputed {
+			continue
+		}
+
 		if ok && nullString.Valid {
 			value, err = field.PrepareValue(record, nullString.String)
 		} else {
@@ -553,6 +558,9 @@ func NewRecord(collection *Collection) *Record {
 
 		if fieldName == FieldNameId {
 			continue
+		}
+		if _, isComputed := field.(*ComputedField); isComputed {
+			continue // virtual fields are not part of record DB state
 		}
 
 		value, _ := field.PrepareValue(record, nil)
@@ -658,6 +666,7 @@ func (m *Record) Clone() *Record {
 	newRecord.exportCustomData = m.exportCustomData
 	newRecord.ignoreEmailVisibility = m.ignoreEmailVisibility
 	newRecord.ignoreUnchangedFields = m.ignoreUnchangedFields
+	newRecord.computed = m.computed
 	newRecord.customVisibility.Reset(m.customVisibility.GetAll())
 
 	data := m.data.GetAll()
@@ -1138,6 +1147,10 @@ func (m *Record) dbExport() (map[string]any, error) {
 	var fieldName string
 	for _, field := range fields {
 		fieldName = field.GetName()
+
+		if _, isComputed := field.(*ComputedField); isComputed {
+			continue
+		}
 
 		if f, ok := field.(DriverValuer); ok {
 			v, err := f.DriverValue(m)

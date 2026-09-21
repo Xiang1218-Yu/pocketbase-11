@@ -1,3 +1,8 @@
+## Unreleased
+
+- Added read-only, non-persisted `computed` collection fields evaluated by a restricted JavaScript expression or function. Computed values are consistently applied to list, view, expand, filter and realtime payloads; evaluation failures fail the whole batch, and dependencies are checked against the existing hidden-field and collection access rules.
+
+
 ## v0.40.3
 
 - Write the status header for JSON responses only if the fields picker succeed or has acceptable fallback.

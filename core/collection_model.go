@@ -739,6 +739,9 @@ func onCollectionDeleteExecute(e *CollectionEvent) error {
 	})
 
 	e.App = originalApp
+	if txErr == nil {
+		ResetComputedProgramCache()
+	}
 
 	return txErr
 }
@@ -924,6 +927,8 @@ func onCollectionSaveExecute(e *CollectionEvent) error {
 	if txErr != nil {
 		return txErr
 	}
+
+	ResetComputedProgramCache()
 
 	// trigger an update for all views with changed fields as a result of the current collection save
 	// (only log the error to allow users to adjust the problematic view queries from the UI)

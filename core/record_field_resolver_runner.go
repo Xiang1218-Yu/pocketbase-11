@@ -457,6 +457,9 @@ func (r *runner) processActiveProps() (*search.ResolverResult, error) {
 		if field != nil && field.GetHidden() && !r.resolver.allowHiddenFields {
 			return nil, fmt.Errorf("non-filterable field %q", prop)
 		}
+		if _, isComputed := field.(*ComputedField); isComputed {
+			return nil, fmt.Errorf("computed field %q can only be evaluated in memory", prop)
+		}
 
 		// @todo consider moving to the finalizer and converting to "JSONExtractable" interface with optional extra validation for the remaining props?
 		// json or geoPoint field -> treat the rest of the props as json path
@@ -749,6 +752,9 @@ func (r *runner) finalizeActivePropsProcessing(collection *Collection, prop stri
 
 	if field.GetHidden() && !r.resolver.allowHiddenFields {
 		return nil, fmt.Errorf("non-filterable field %q", name)
+	}
+	if _, isComputed := field.(*ComputedField); isComputed {
+		return nil, fmt.Errorf("computed field %q can only be evaluated in memory", name)
 	}
 
 	multvaluer, isMultivaluer := field.(MultiValuer)

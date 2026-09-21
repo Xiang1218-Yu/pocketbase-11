@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ganigeorgiev/fexpr"
 	"github.com/pocketbase/dbx"
 	validation "github.com/pocketbase/ozzo-validation/v4"
 	"github.com/pocketbase/pocketbase/core"
@@ -687,6 +688,10 @@ func realtimeBroadcastRecord(app core.App, action string, record *core.Record, d
 								}
 							}
 
+							if err := core.PrepareVisibleComputedFields(app, requestInfo, []*core.Record{cleanRecord}); err != nil {
+								return err
+							}
+
 							// ignore the auth record email visibility checks
 							// for auth owner, superuser or manager
 							if collection.IsAuth() {
@@ -875,6 +880,24 @@ func realtimeCanAccessRecord(
 	err := checkForSuperuserOnlyRuleFields(requestInfo)
 	if err != nil {
 		return false
+	}
+
+	usesComputedFilter, _ := filterUsesComputedField(record.Collection(), filter)
+	if usesComputedFilter {
+		if _, parseErr := fexpr.Parse(filter); parseErr != nil {
+			return false
+		}
+		if requestInfo.HasSuperuserAuth() {
+			record.Unhide(record.Collection().Fields.FieldNames()...).IgnoreEmailVisibility(true)
+		}
+		if err := core.PrepareVisibleComputedFields(app, requestInfo, []*core.Record{record}); err != nil {
+			return false
+		}
+		if err := expandComputedFilterRelations(app, requestInfo, []*core.Record{record}, filter); err != nil {
+			return false
+		}
+		filtered, err := evaluateInMemoryFilter(record.Collection(), []*core.Record{record}, filter, requestInfo)
+		return err == nil && len(filtered) == 1
 	}
 
 	var exists int

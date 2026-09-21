@@ -111,6 +111,9 @@ func recordAuthResponse(e *core.RequestEvent, authRecord *core.Record, token str
 					e.App.Logger().Warn("[recordAuthResponse] Failed to expand relations", "error", failed)
 				}
 			}
+			if err := core.PrepareVisibleComputedFields(e.App, &requestInfo, []*core.Record{e.Record}); err != nil {
+				return err
+			}
 
 			return nil
 		})
@@ -287,7 +290,11 @@ func EnrichRecords(e *core.RequestEvent, records []*core.Record, defaultExpands 
 
 		err := defaultEnrichRecords(e.App, info, records, expands...)
 		if err != nil {
-			// only log because it is not critical
+			if errors.Is(err, core.ErrComputedField) {
+				return err
+			}
+			// keep the pre-existing backward-compatible behavior for
+			// non-computed enrich errors (e.g. inaccessible expand path)
 			e.App.Logger().Warn("failed to apply default enriching", "error", err)
 		}
 
@@ -369,6 +376,10 @@ func defaultEnrichRecords(app core.App, requestInfo *core.RequestInfo, records [
 		}
 	}
 
+	if err := core.PrepareVisibleComputedFields(app, requestInfo, records); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -415,6 +426,9 @@ func expandFetch(app core.App, originalRequestInfo *core.RequestInfo) core.Expan
 			if err := autoResolveRecordsFlags(app, records, requestInfoPtr); err != nil {
 				// non-critical error
 				app.Logger().Warn("Failed to apply autoResolveRecordsFlags for the expanded records", "error", err)
+			}
+			if err := core.PrepareVisibleComputedFields(app, requestInfoPtr, records); err != nil {
+				return err
 			}
 
 			return nil
